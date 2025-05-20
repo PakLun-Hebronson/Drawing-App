@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Advanced Drawing App</title>
+  <style>
+    body { text-align: center; font-family: Arial, sans-serif; background: #f0f0f0; }
+    canvas { border: 2px solid #333; background: #fff; margin-top: 20px; cursor: crosshair; touch-action: none; }
+    .toolbar { margin-top: 20px; }
+    button, label, input[type="color"] { font-size: 16px; margin: 0 10px; padding: 8px 18px; }
+    .active { background: #333; color: #fff; }
+    .shape-btn { padding: 8px 10px; }
+    #galleryList { margin-top: 15px; }
+    #galleryList button { margin: 0 4px; font-size: 14px; padding: 4px 10px; }
+    #bgInput { margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Advanced Drawing App</h1>
+  <div class="toolbar">
+    <button id="pencilBtn" class="active">Pencil</button>
+    <button id="eraserBtn">Eraser</button>
+    <button id="rectBtn" class="shape-btn">Rectangle</button>
+    <button id="circleBtn" class="shape-btn">Circle</button>
+    <input type="color" id="colorPicker" value="#222222" title="Choose pencil color">
+    <label for="pencilSize" style="margin-left:10px;">Pencil Size:</label>
+    <input type="range" id="pencilSize" min="1" max="30" value="2" style="vertical-align:middle; width:100px;">
+    <span id="pencilSizeValue">2</span>
+    <button id="undoBtn">Undo</button>
+    <button id="redoBtn">Redo</button>
+    <button id="clearBtn">Clear</button>
+    <button id="saveBtn">Save as PNG</button>
+    <button id="saveSvgBtn">Save as SVG</button>
+    <button id="saveJpegBtn">Save as JPEG</button>
+    <input type="file" id="bgInput" accept="image/*" title="Set Background Image">
+  </div>
+  <div id="canvasContainer" style="display:inline-block; position:relative; resize:both; overflow:auto; border: 2px solid #333; min-width:200px; min-height:150px; max-width:100vw; max-height:70vh;">
+    <canvas id="drawingCanvas" width="800" height="500" style="display:block; touch-action: none;"></canvas>
+    <div id="resizeHandle" style="position:absolute; width:16px; height:16px; right:0; bottom:0; cursor:se-resize;"></div>
+  </div>
+  <div id="galleryControls" style="margin-top:20px;">
+    <input type="text" id="galleryName" placeholder="Drawing name" style="font-size:16px; padding:4px 10px;">
+    <button id="gallerySaveBtn">Save to Gallery</button>
+    <span id="galleryStatus" style="color:green; margin-left:10px;"></span>
+    <div id="galleryList"></div>
+  </div>
+  <script>
+    const canvas = document.getElementById('drawingCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvasContainer');
+    let drawing = false, erasing = false, shape = null;
+    let lastX = 0, lastY = 0, startX = 0, startY = 0;
+    let pencilColor = '#222', pencilWidth = 2;
+    let undoStack = [], redoStack = [];
+    let bgImage = null;
+    let drawingMode = 'pencil'; // pencil, eraser, rect, circle
+    let tempShape = null;
+
+    // --- Canvas Resize ---
+    function resizeCanvasToContainer() {
+      const temp = document.createElement('canvas');
+      temp.width = canvas.width;
+      temp.height = canvas.height;
+      temp.getContext('2d').drawImage(canvas, 0, 0);
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+      redrawAll();
+      ctx.drawImage(temp, 0, 0, temp.width, temp.height, 0, 0, canvas.width, canvas.height);
+    }
+    let resizeObserver = new ResizeObserver(() => { resizeCanvasToContainer(); });
+    resizeObserver.observe(container);
+
+    // --- Pencil Size & Color ---
+    const pencilSizeSlider = document.getElementById('pencilSize');
+    const pencilSizeValue = document.getElementById('pencilSizeValue');
+    pencilSizeSlider.addEventListener('input', function() {
+      pencilWidth = parseInt(this.value, 10);
+      pencilSizeValue.textContent = this.value;
+    });
+    document.getElementById('colorPicker').addEventListener('input', function() {
+      pencilColor = this.value;
+    });
+
+    // --- Toolbar Buttons ---
+    document.getElementById('pencilBtn').onclick = function() {
+      drawingMode = 'pencil'; erasing = false; shape = null;
+      setActiveBtn(this);
+    };
+    document.getElementById('eraserBtn').onclick = function() {
+      drawingMode = 'eraser'; erasing = true; shape = null;
+      setActiveBtn(this);
+    };
+    document.getElementById('rectBtn').onclick = function() {
+      drawingMode = 'rect'; erasing = false; shape = 'rect';
+      setActiveBtn(this);
+    };
+    document.getElementById('circleBtn').onclick = function() {
+      drawingMode = 'circle'; erasing = false; shape = 'circle';
+      setActiveBtn(this);
+    };
+    function setActiveBtn(btn) {
+      ['pencilBtn','eraserBtn','rectBtn','circleBtn'].forEach(id => {
+        document.getElementById(id).classList.remove('active');
+      });
+      btn.classList.add('active');
+    }
+
+    // --- Undo/Redo ---
+    function pushUndo() {
+      undoStack.push(canvas.toDataURL());
+      if (undoStack.length > 50) undoStack.shift();
+      redoStack = [];
+    }
+    function undo() {
+      if (undoStack.length === 0) return;
+      redoStack.push(canvas.toDataURL());
+      let img = new window.Image();
+      img.onload = function() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = undoStack.pop();
+    }
+    function redo() {
+      if (redoStack.length === 0) return;
+      undoStack.push(canvas.toDataURL());
+      let img = new window.Image();
+      img.onload = function() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = redoStack.pop();
+    }
+    document.getElementById('undoBtn').onclick = undo;
+    document.getElementById('redoBtn').onclick = redo;
+
+    // --- Drawing Logic (Mouse & Touch) ---
+    function getPos(e) {
+      if (e.touches && e.touches.length) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.touches[0].clientX - rect.left) * (canvas.width / rect.width),
+          y: (e.touches[0].clientY - rect.top) * (canvas.height / rect.height)
+        };
+      } else {
+        return { x: e.offsetX, y: e.offsetY };
+      }
+    }
+    function startDraw(e) {
+      e.preventDefault();
+      pushUndo();
+      drawing = true;
+      const pos = getPos(e);
+      [lastX, lastY, startX, startY] = [pos.x, pos.y, pos.x, pos.y];
+      if (shape) tempShape = {x: startX, y: startY, w: 0, h: 0};
+    }
+    function draw(e) {
+      if (!drawing) return;
+      const pos = getPos(e);
+      if (drawingMode === 'pencil' || drawingMode === 'eraser') {
+        ctx.strokeStyle = erasing ? '#fff' : pencilColor;
+        ctx.lineWidth = erasing ? 20 : pencilWidth;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        [lastX, lastY] = [pos.x, pos.y];
+      } else if (shape) {
+        redrawAll();
+        let w = pos.x - startX, h = pos.y - startY;
+        tempShape = {x: startX, y: startY, w, h};
+        ctx.save();
+        ctx.strokeStyle = pencilColor;
+        ctx.lineWidth = pencilWidth;
+        ctx.setLineDash([5,5]);
+        if (shape === 'rect') {
+          ctx.strokeRect(startX, startY, w, h);
+        } else if (shape === 'circle') {
+          ctx.beginPath();
+          ctx.ellipse(startX + w/2, startY + h/2, Math.abs(w/2), Math.abs(h/2), 0, 0, 2*Math.PI);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+    function stopDraw(e) {
+      if (!drawing) return;
+      drawing = false;
+      if (shape && tempShape) {
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = pencilColor;
+        ctx.lineWidth = pencilWidth;
+        if (shape === 'rect') {
+          ctx.strokeRect(tempShape.x, tempShape.y, tempShape.w, tempShape.h);
+        } else if (shape === 'circle') {
+          ctx.beginPath();
+          ctx.ellipse(tempShape.x + tempShape.w/2, tempShape.y + tempShape.h/2, Math.abs(tempShape.w/2), Math.abs(tempShape.h/2), 0, 0, 2*Math.PI);
+          ctx.stroke();
+        }
+        ctx.restore();
+        tempShape = null;
+      }
+    }
+    function redrawAll() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+      // Optionally: could replay undoStack[undoStack.length-1] for more advanced history
+    }
+    // Mouse events
+    canvas.addEventListener('mousedown', startDraw);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', stopDraw);
+    canvas.addEventListener('mouseleave', stopDraw);
+    // Touch events
+    canvas.addEventListener('touchstart', startDraw, {passive:false});
+    canvas.addEventListener('touchmove', draw, {passive:false});
+    canvas.addEventListener('touchend', stopDraw, {passive:false});
+    canvas.addEventListener('touchcancel', stopDraw, {passive:false});
+
+    // --- Clear Button ---
+    document.getElementById('clearBtn').onclick = function() {
+      pushUndo();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+    };
+
+    // --- Save as PNG ---
+    document.getElementById('saveBtn').onclick = function() {
+      const link = document.createElement('a');
+      link.download = 'drawing.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    };
+    // --- Save as SVG ---
+    document.getElementById('saveSvgBtn').onclick = function() {
+      let svg = `<svg width='${canvas.width}' height='${canvas.height}' xmlns='http://www.w3.org/2000/svg'><foreignObject width='100%' height='100%'><canvas xmlns="http://www.w3.org/1999/xhtml" width="${canvas.width}" height="${canvas.height}"></canvas></foreignObject></svg>`;
+      // Note: This is a placeholder; for true SVG, would need to record vector actions. Here, just wraps raster as SVG.
+      const blob = new Blob([svg], {type:'image/svg+xml'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'drawing.svg';
+      link.click();
+      setTimeout(()=>URL.revokeObjectURL(url), 100);
+    };
+    // --- Save as JPEG ---
+    document.getElementById('saveJpegBtn').onclick = function() {
+      const link = document.createElement('a');
+      link.download = 'drawing.jpg';
+      link.href = canvas.toDataURL('image/jpeg', 0.95);
+      link.click();
+    };
+
+    // --- Background Image Support ---
+    document.getElementById('bgInput').addEventListener('change', function(e) {
+      if (!e.target.files.length) return;
+      let file = e.target.files[0];
+      let reader = new FileReader();
+      reader.onload = function(evt) {
+        let img = new window.Image();
+        img.onload = function() {
+          bgImage = img;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+        };
+        img.src = evt.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // --- Gallery: Save/Load Multiple Drawings ---
+    function updateGalleryList() {
+      const listDiv = document.getElementById('galleryList');
+      listDiv.innerHTML = '';
+      let keys = Object.keys(localStorage).filter(k => k.startsWith('drawing_'));
+      keys.forEach(key => {
+        let name = key.replace('drawing_', '');
+        let btn = document.createElement('button');
+        btn.textContent = name;
+        btn.onclick = function() {
+          let data = localStorage.getItem(key);
+          let img = new window.Image();
+          img.onload = function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (bgImage) ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          };
+          img.src = data;
+        };
+        listDiv.appendChild(btn);
+      });
+    }
+    document.getElementById('gallerySaveBtn').onclick = function() {
+      let name = document.getElementById('galleryName').value.trim();
+      if (!name) {
+        document.getElementById('galleryStatus').textContent = 'Enter a name!';
+        setTimeout(()=>document.getElementById('galleryStatus').textContent='', 1500);
+        return;
+      }
+      localStorage.setItem('drawing_' + name, canvas.toDataURL());
+      document.getElementById('galleryStatus').textContent = 'Saved!';
+      setTimeout(()=>document.getElementById('galleryStatus').textContent='', 1500);
+      updateGalleryList();
+    };
+    updateGalleryList();
+
+    // --- Utility: Prevent scrolling on touch ---
+    document.body.addEventListener('touchstart', function(e) {
+      if (e.target === canvas) e.preventDefault();
+    }, { passive: false });
+    document.body.addEventListener('touchend', function(e) {
+      if (e.target === canvas) e.preventDefault();
+    }, { passive: false });
+    document.body.addEventListener('touchmove', function(e) {
+      if (e.target === canvas) e.preventDefault();
+    }, { passive: false });
+  </script>
+</body>
+</html>
